@@ -467,3 +467,26 @@ def : SysReg<"sctrstatus", 0x14f>;
 def : SysReg<"sctrdepth", 0x15f>;
 def : SysReg<"vsctrctl", 0x24e>;
 def : SysReg<"mctrctl", 0x34e>;
+
+//===-----------------------------------------------
+// Qualcomm uC Xqciint Custom CSRs
+//===-----------------------------------------------
+let FeaturesRequired = [{ {RISCV::FeatureVendorXqciint} }], isRV32Only = 1 in {
+def : SysReg<"qc.mncause", 0x7C2>;
+def : SysReg<"qc.mclicip0", 0x7F0>;
+def : SysReg<"qc.mclicip1", 0x7F1>;
+def : SysReg<"qc.mclicip2", 0x7F2>;
+def : SysReg<"qc.mclicip3", 0x7F3>;
+def : SysReg<"qc.mclicip4", 0x7F4>;
+def : SysReg<"qc.mclicip5", 0x7F5>;
+def : SysReg<"qc.mclicip6", 0x7F6>;
+def : SysReg<"qc.mclicip7", 0x7F7>;
+def : SysReg<"qc.mclicie0", 0x7F8>;
+def : SysReg<"qc.mclicie1", 0x7F9>;
+def : SysReg<"qc.mclicie2", 0x7FA>;
+def : SysReg<"qc.mclicie3", 0x7FB>;
+def : SysReg<"qc.mclicie4", 0x7FC>;
+def : SysReg<"qc.mclicie5", 0x7FD>;
+def : SysReg<"qc.mclicie6", 0x7FE>;
+def : SysReg<"qc.mclicie7", 0x7FF>;
+} // FeatureVendorXqciint, isRV32Only

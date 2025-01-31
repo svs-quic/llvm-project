@@ -100,6 +100,8 @@ Changes to the PowerPC Backend
 Changes to the RISC-V Backend
 -----------------------------
 
+* Added CSR names for the Qualcomm uC Xqciint (Interrupts) extension.
+
 Changes to the WebAssembly Backend
 ----------------------------------
 
