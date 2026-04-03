@@ -35,6 +35,7 @@
 #include "llvm/MC/MCInstBuilder.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 
 using namespace llvm;
 
@@ -3634,7 +3635,11 @@ bool RISCVInstrInfo::isMBBSafeToOutlineFrom(MachineBasicBlock &MBB,
 // Enum values indicating how an outlined call should be constructed.
 enum MachineOutlinerConstructionID {
   MachineOutlinerTailCall,
-  MachineOutlinerDefault
+  // Call the outlined function using X5 as an alternate link register.
+  MachineOutlinerNoLRSave,
+  // Save/restore X5 around the outlined call (requires stack fixups in the
+  // outlined function for SP-based accesses).
+  MachineOutlinerLRSave
 };
 
 bool RISCVInstrInfo::shouldOutlineFromFunctionByDefault(
@@ -3682,6 +3687,96 @@ static bool cannotInsertTailCall(const MachineBasicBlock &MBB) {
   return false;
 }
 
+static constexpr MCRegister OutlinerLRReg = RISCV::X5;
+static constexpr MCRegister SPReg = RISCV::X2;
+static constexpr int64_t LRSaveStackSize = 16;
+
+static bool getRISCVMemBaseRegAndOffset(const MachineInstr &MI, Register &BaseReg,
+                                       int64_t &Offset) {
+  // Most scalar RISC-V loads/stores use a base+imm addressing mode with the base
+  // at operand 1 and the byte offset at operand 2.
+  if (!MI.mayLoadOrStore() || MI.getNumExplicitOperands() != 3)
+    return false;
+  const MachineOperand &BaseOp = MI.getOperand(1);
+  const MachineOperand &OffsetOp = MI.getOperand(2);
+  if (!BaseOp.isReg() || !OffsetOp.isImm())
+    return false;
+  BaseReg = BaseOp.getReg();
+  Offset = OffsetOp.getImm();
+  return true;
+}
+
+static bool sequenceMayNeedLRSaveFixups(outliner::Candidate &C,
+                                       const TargetRegisterInfo &TRI) {
+  // LRSave changes SP by LRSaveStackSize at the call site. This only matters
+  // for instructions that reference SP.
+  for (const MachineInstr &MI : C) {
+    if (MI.mayLoadOrStore()) {
+      Register BaseReg;
+      int64_t Offset;
+      if (getRISCVMemBaseRegAndOffset(MI, BaseReg, Offset) && BaseReg == SPReg)
+        return true;
+      if (isMIReadsReg(MI, &TRI, SPReg))
+        return true;
+      continue;
+    }
+
+    if (isMIReadsReg(MI, &TRI, SPReg))
+      return true;
+  }
+  return false;
+}
+
+static bool canFixupOutlinedLRSave(outliner::Candidate &C,
+                                  const TargetRegisterInfo &TRI) {
+  // LRSave changes SP by LRSaveStackSize at the call site, so outlined code must
+  // not depend on SP's value changing within the sequence.
+  if (llvm::any_of(C, [&TRI](const MachineInstr &MI) {
+        return MI.modifiesRegister(SPReg, &TRI);
+      }))
+    return false;
+
+  // Ensure that every SP-based load/store with an immediate offset can be fixed
+  // up without overflowing the immediate field.
+  for (const MachineInstr &MI : C) {
+    if (!MI.mayLoadOrStore())
+      continue;
+
+    if (MI.getNumExplicitOperands() > 1 && MI.getOperand(1).isFI())
+      return false;
+
+    Register BaseReg;
+    int64_t Offset;
+    if (getRISCVMemBaseRegAndOffset(MI, BaseReg, Offset)) {
+      if (BaseReg == SPReg && !isInt<12>(Offset + LRSaveStackSize))
+        return false;
+      continue;
+    }
+
+    // If we can't recognize the addressing operands, be conservative if SP is
+    // referenced, since LRSave requires updating SP-based references.
+    if (isMIReadsReg(MI, &TRI, SPReg))
+      return false;
+  }
+
+  return true;
+}
+
+static void fixupOutlinedLRSaveFrame(MachineBasicBlock &MBB,
+                                    const TargetRegisterInfo &TRI) {
+  for (MachineInstr &MI : MBB) {
+    if (!MI.mayLoadOrStore())
+      continue;
+
+    Register BaseReg;
+    int64_t Offset;
+    if (!getRISCVMemBaseRegAndOffset(MI, BaseReg, Offset) || BaseReg != SPReg)
+      continue;
+
+    MI.getOperand(2).setImm(Offset + LRSaveStackSize);
+  }
+}
+
 bool RISCVInstrInfo::analyzeCandidate(outliner::Candidate &C) const {
   // If the expansion register for tail calls is live across the candidate
   // outlined call site, we cannot outline that candidate as the expansion
@@ -3710,11 +3805,17 @@ bool RISCVInstrInfo::analyzeCandidate(outliner::Candidate &C) const {
   // Filter out candidates where the X5 register (t0) can't be used to setup
   // the function call.
   if (llvm::any_of(C, [this](const MachineInstr &MI) {
-        return isMIModifiesReg(MI, &RegInfo, RISCV::X5);
+        return isMIReadsReg(MI, &RegInfo, OutlinerLRReg) ||
+               isMIModifiesReg(MI, &RegInfo, OutlinerLRReg);
       }))
     return true;
 
-  return !C.isAvailableAcrossAndOutOfSeq(RISCV::X5, RegInfo);
+  if (RegInfo.getReservedRegs(*C.getMF()).test(OutlinerLRReg))
+    return true;
+
+  // Even if OutlinerLRReg is live across the call site, we can still outline by
+  // saving/restoring it (MachineOutlinerLRSave).
+  return false;
 }
 
 std::optional<std::unique_ptr<outliner::OutlinedFunction>>
@@ -3759,35 +3860,88 @@ RISCVInstrInfo::getOutliningCandidateInfo(
       return std::nullopt;
   }
 
-  MachineOutlinerConstructionID MOCI = MachineOutlinerDefault;
+  MachineOutlinerConstructionID FrameID = MachineOutlinerNoLRSave;
   if (Candidate.back().isReturn()) {
-    MOCI = MachineOutlinerTailCall;
+    FrameID = MachineOutlinerTailCall;
     // tail call = auipc + jalr in the worst case without linker relaxation.
     // FIXME: This code suggests the JALR can be compressed - how?
     CallOverhead = 4 + InstrSizeCExt;
     // Using tail call we move ret instruction from caller to callee.
     FrameOverhead = 0;
+    for (auto &C : RepeatedSequenceLocs)
+      C.setCallInfo(MachineOutlinerTailCall, CallOverhead);
   } else {
     // call t0, function = 8 bytes.
-    CallOverhead = 8;
+    const unsigned CallOverheadNoSave = 8;
+    const unsigned CallOverheadLRSave = 8 + 4 * InstrSizeCExt;
     // jr t0 = 4 bytes, 2 bytes if compressed instructions are enabled.
     FrameOverhead = InstrSizeCExt;
+
+    const bool AnyNeedsSave =
+        llvm::any_of(RepeatedSequenceLocs, [this](auto &C) {
+          return !C.isAvailableAcrossAndOutOfSeq(OutlinerLRReg, RegInfo);
+        });
+
+    if (!AnyNeedsSave) {
+      for (auto &C : RepeatedSequenceLocs)
+        C.setCallInfo(MachineOutlinerNoLRSave, CallOverheadNoSave);
+    } else {
+      const bool SequenceTouchesSP =
+          sequenceMayNeedLRSaveFixups(Candidate, RegInfo);
+      const bool FixupOK = canFixupOutlinedLRSave(Candidate, RegInfo);
+
+      if (SequenceTouchesSP) {
+        // If the sequence depends on SP, then all call sites must use the same
+        // LR-save strategy so that the outlined function can be fixed up.
+        if (!FixupOK) {
+          // Can't safely LR-save with this sequence. Drop candidates that would
+          // need LR saving and see if enough remain.
+          llvm::erase_if(RepeatedSequenceLocs, [this](auto &C) {
+            return !C.isAvailableAcrossAndOutOfSeq(OutlinerLRReg, RegInfo);
+          });
+          if (RepeatedSequenceLocs.size() < MinRepeats)
+            return std::nullopt;
+          for (auto &C : RepeatedSequenceLocs)
+            C.setCallInfo(MachineOutlinerNoLRSave, CallOverheadNoSave);
+        } else {
+          FrameID = MachineOutlinerLRSave;
+          for (auto &C : RepeatedSequenceLocs)
+            C.setCallInfo(MachineOutlinerLRSave, CallOverheadLRSave);
+        }
+      } else {
+        // If the sequence is independent of SP, we can mix LR-save and no-save
+        // call sites.
+        for (auto &C : RepeatedSequenceLocs) {
+          const bool NeedsSave =
+              !C.isAvailableAcrossAndOutOfSeq(OutlinerLRReg, RegInfo);
+          C.setCallInfo(NeedsSave ? MachineOutlinerLRSave
+                                  : MachineOutlinerNoLRSave,
+                        NeedsSave ? CallOverheadLRSave : CallOverheadNoSave);
+        }
+      }
+    }
   }
 
   // If we have CFI instructions, we can only outline if the outlined section
   // can be a tail call.
-  if (MOCI != MachineOutlinerTailCall && CFICount > 0)
+  if (FrameID != MachineOutlinerTailCall && CFICount > 0)
     return std::nullopt;
-
-  for (auto &C : RepeatedSequenceLocs)
-    C.setCallInfo(MOCI, CallOverhead);
 
   unsigned SequenceSize = 0;
   for (auto &MI : Candidate)
     SequenceSize += getInstSizeInBytes(MI);
 
+  // If a call site costs more than leaving the sequence in place, don't include
+  // it in the outlined function.
+  llvm::erase_if(RepeatedSequenceLocs, [SequenceSize](outliner::Candidate &C) {
+    return C.getCallOverhead() >= SequenceSize;
+  });
+
+  if (RepeatedSequenceLocs.size() < MinRepeats)
+    return std::nullopt;
+
   return std::make_unique<outliner::OutlinedFunction>(
-      RepeatedSequenceLocs, SequenceSize, FrameOverhead, MOCI);
+      RepeatedSequenceLocs, SequenceSize, FrameOverhead, FrameID);
 }
 
 outliner::InstrType
@@ -3834,13 +3988,16 @@ void RISCVInstrInfo::buildOutlinedFrame(
   if (OF.FrameConstructionID == MachineOutlinerTailCall)
     return;
 
-  MBB.addLiveIn(RISCV::X5);
+  MBB.addLiveIn(OutlinerLRReg);
 
   // Add in a return instruction to the end of the outlined frame.
   MBB.insert(MBB.end(), BuildMI(MF, DebugLoc(), get(RISCV::JALR))
       .addReg(RISCV::X0, RegState::Define)
-      .addReg(RISCV::X5)
+      .addReg(OutlinerLRReg)
       .addImm(0));
+
+  if (OF.FrameConstructionID == MachineOutlinerLRSave)
+    fixupOutlinedLRSaveFrame(MBB, RegInfo);
 }
 
 MachineBasicBlock::iterator RISCVInstrInfo::insertOutlinedCall(
@@ -3854,9 +4011,46 @@ MachineBasicBlock::iterator RISCVInstrInfo::insertOutlinedCall(
     return It;
   }
 
+  if (C.CallConstructionID == MachineOutlinerLRSave) {
+    // Save/restore OutlinerLRReg around the call.
+    const bool IsRV64 = STI.getXLen() == 64;
+    const unsigned StoreOpc = IsRV64 ? RISCV::SD : RISCV::SW;
+    const unsigned LoadOpc = IsRV64 ? RISCV::LD : RISCV::LW;
+    const int64_t SaveOffset = IsRV64 ? 8 : 12;
+
+    // Keep SP 16-byte aligned at the call site.
+    It = MBB.insert(It, BuildMI(MF, DebugLoc(), get(RISCV::ADDI), SPReg)
+                            .addReg(SPReg)
+                            .addImm(-LRSaveStackSize));
+    ++It;
+    It = MBB.insert(It, BuildMI(MF, DebugLoc(), get(StoreOpc))
+                            .addReg(OutlinerLRReg)
+                            .addReg(SPReg)
+                            .addImm(SaveOffset));
+    ++It;
+
+    It = MBB.insert(It,
+                    BuildMI(MF, DebugLoc(), get(RISCV::PseudoCALLReg),
+                            OutlinerLRReg)
+                        .addGlobalAddress(M.getNamedValue(MF.getName()), 0,
+                                          RISCVII::MO_CALL));
+    MachineBasicBlock::iterator CallPt = It;
+    ++It;
+
+    It = MBB.insert(It, BuildMI(MF, DebugLoc(), get(LoadOpc), OutlinerLRReg)
+                            .addReg(SPReg)
+                            .addImm(SaveOffset));
+    ++It;
+    It = MBB.insert(It, BuildMI(MF, DebugLoc(), get(RISCV::ADDI), SPReg)
+                            .addReg(SPReg)
+                            .addImm(LRSaveStackSize));
+    return CallPt;
+  }
+
   // Add in a call instruction to the outlined function at the given location.
   It = MBB.insert(It,
-                  BuildMI(MF, DebugLoc(), get(RISCV::PseudoCALLReg), RISCV::X5)
+                  BuildMI(MF, DebugLoc(), get(RISCV::PseudoCALLReg),
+                          OutlinerLRReg)
                       .addGlobalAddress(M.getNamedValue(MF.getName()), 0,
                                         RISCVII::MO_CALL));
   return It;
