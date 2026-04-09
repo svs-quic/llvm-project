@@ -30,9 +30,11 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/CodeGen/Passes.h"
+#include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Target/TargetOptions.h"
+#include <algorithm>
 
 using namespace llvm;
 
@@ -75,6 +77,8 @@ struct RISCVLoadStoreOpt : public MachineFunctionPass {
                                    MachineBasicBlock::iterator First,
                                    MachineBasicBlock::iterator Second);
   bool tryConvertToXqcilsmMultiLdSt(MachineBasicBlock::iterator &First);
+  bool tryConvertZilsdZeroStoresToXqcilsmSetwmi(
+      MachineBasicBlock::iterator &FirstIt);
   bool tryConvertToMIPSLdStPair(MachineFunction *MF,
                                 MachineBasicBlock::iterator First,
                                 MachineBasicBlock::iterator Second);
@@ -147,6 +151,21 @@ bool RISCVLoadStoreOpt::runOnMachineFunction(MachineFunction &Fn) {
         } else {
           ++MBBI;
         }
+      }
+    }
+  }
+
+  // After expanding Zilsd pseudos to real SD_RV32, try to fold runs of
+  // SD_RV32 stores of zero into QC_SETWMI. This is especially beneficial when
+  // negative offsets prevent direct encoding in QC_SETWMI and we can fold the
+  // base adjustment into an ADDI.
+  if (!STI->is64Bit() && STI->hasStdExtZilsd() && STI->hasVendorXqcilsm()) {
+    for (auto &MBB : Fn) {
+      for (auto MBBI = MBB.begin(), E = MBB.end(); MBBI != E;) {
+        if (tryConvertZilsdZeroStoresToXqcilsmSetwmi(MBBI))
+          MadeChange = true;
+        else
+          ++MBBI;
       }
     }
   }
@@ -375,6 +394,202 @@ bool RISCVLoadStoreOpt::tryConvertToXqcilsmMultiLdSt(
 
   // Advance the cursor to the next non-debug instruction after the group.
   FirstIt = next_nodbg(NewIt, MBB->end());
+  return true;
+}
+
+// Convert a run of consecutive SD_RV32 stores of the zero register pair into a
+// single QC_SETWMI. Since QC_SETWMI only supports unsigned offsets in the
+// range [0, 124] (multiples of 4), negative (or large) SD offsets require an
+// ADDI to materialize an adjusted base address.
+bool RISCVLoadStoreOpt::tryConvertZilsdZeroStoresToXqcilsmSetwmi(
+    MachineBasicBlock::iterator &FirstIt) {
+  MachineInstr &FirstMI = *FirstIt;
+  MachineFunction *MF = FirstMI.getMF();
+
+  if (STI->is64Bit() || !STI->hasVendorXqcilsm() || !STI->hasStdExtZilsd())
+    return false;
+
+  if (FirstMI.getOpcode() != RISCV::SD_RV32)
+    return false;
+
+  if (FirstMI.hasOrderedMemoryRef())
+    return false;
+
+  if (!TII->isLdStSafeToPair(FirstMI, TRI))
+    return false;
+
+  if (!FirstMI.hasOneMemOperand())
+    return false;
+
+  // QC_SETWMI stores 32-bit words; require at least word alignment.
+  if (!isMemOpAligned(FirstMI, Align(4)))
+    return false;
+
+  // Require simple reg+imm addressing.
+  const MachineOperand &SrcOp = FirstMI.getOperand(0);
+  const MachineOperand &BaseOp = FirstMI.getOperand(1);
+  const MachineOperand &OffOp = FirstMI.getOperand(2);
+  if (!SrcOp.isReg() || !BaseOp.isReg() || !OffOp.isImm())
+    return false;
+
+  // Only handle zero stores; SD_RV32 uses a dummy odd register in X0_Pair.
+  if (SrcOp.getReg() != RISCV::X0_Pair)
+    return false;
+
+  Register Base = BaseOp.getReg();
+  int64_t FirstOff = OffOp.getImm();
+
+  // SD_RV32 offsets are in bytes. Require 4-byte granularity so we can map to
+  // QC_SETWMI's word stores.
+  if ((FirstOff & 0x3) != 0)
+    return false;
+
+  SmallVector<MachineInstr *, 8> Group;
+  SmallVector<int64_t, 8> Offsets;
+  Group.push_back(&FirstMI);
+  Offsets.push_back(FirstOff);
+
+  MachineBasicBlock *MBB = FirstIt->getParent();
+  MachineBasicBlock::iterator E = MBB->end();
+  MachineBasicBlock::iterator It = next_nodbg(FirstIt, E);
+
+  // Determine direction based on the next instruction (if any). We accept both
+  // ascending and descending runs.
+  int64_t Stride = 0;
+  if (It != E && It->getOpcode() == RISCV::SD_RV32 && It->hasOneMemOperand() &&
+      !It->hasOrderedMemoryRef() && TII->isLdStSafeToPair(*It, TRI) &&
+      isMemOpAligned(*It, Align(4)) && It->getOperand(0).isReg() &&
+      It->getOperand(0).getReg() == RISCV::X0_Pair &&
+      It->getOperand(1).isReg() && It->getOperand(1).getReg() == Base &&
+      It->getOperand(2).isImm()) {
+    int64_t SecondOff = It->getOperand(2).getImm();
+    if (SecondOff - FirstOff == 8)
+      Stride = 8;
+    else if (SecondOff - FirstOff == -8)
+      Stride = -8;
+  }
+
+  if (Stride == 0)
+    return false;
+
+  int64_t ExpectedOff = FirstOff + Stride;
+  while (It != E) {
+    MachineInstr &MI = *It;
+
+    if (MI.getOpcode() != RISCV::SD_RV32)
+      break;
+    if (MI.hasOrderedMemoryRef())
+      break;
+    if (!TII->isLdStSafeToPair(MI, TRI))
+      break;
+    if (!MI.hasOneMemOperand())
+      break;
+    if (!isMemOpAligned(MI, Align(4)))
+      break;
+
+    const MachineOperand &MIOp0 = MI.getOperand(0);
+    const MachineOperand &MIOp1 = MI.getOperand(1);
+    const MachineOperand &MIOp2 = MI.getOperand(2);
+    if (!MIOp0.isReg() || !MIOp1.isReg() || !MIOp2.isImm())
+      break;
+    if (MIOp0.getReg() != RISCV::X0_Pair)
+      break;
+    if (MIOp1.getReg() != Base)
+      break;
+
+    int64_t Off = MIOp2.getImm();
+    if (Off != ExpectedOff)
+      break;
+    if ((Off & 0x3) != 0)
+      break;
+
+    Group.push_back(&MI);
+    Offsets.push_back(Off);
+    ExpectedOff += Stride;
+    It = next_nodbg(It, E);
+  }
+
+  // Iterator to the first instruction after the group (computed before any
+  // modifications).
+  MachineBasicBlock::iterator AfterGroupIt = It;
+
+  unsigned NumSDs = Group.size();
+  if (NumSDs < 2 || NumSDs > 15)
+    return false;
+
+  // If we need an ADDI to adjust the base, require at least 3 stores to be
+  // profitable (N SDs -> 2 instructions).
+  int64_t MinOff = *std::min_element(Offsets.begin(), Offsets.end());
+  bool OffsetEncodable = isShiftedUInt<5, 2>(MinOff);
+  if (!OffsetEncodable && NumSDs < 3)
+    return false;
+
+  unsigned LenWords = NumSDs * 2;
+  assert(LenWords <= 31 && "LenWords must fit uimm5nonzero");
+
+  // Aggregate kill on base.
+  bool BaseKill = false;
+  for (MachineInstr *MI : Group)
+    BaseKill |= MI->getOperand(1).isKill();
+
+  DebugLoc DL = FirstMI.getDebugLoc();
+  if (!DL)
+    DL = Group.back()->getDebugLoc();
+
+  Register NewBase = Base;
+  int64_t QcOff = MinOff;
+
+  if (!OffsetEncodable) {
+    // Fold MinOff into the base to make QC_SETWMI's offset field zero.
+    if (!isInt<12>(MinOff))
+      return false;
+
+    QcOff = 0;
+
+    // Prefer reusing the base register only if it is dead after the group and
+    // isn't SP (to avoid accidental stack pointer updates).
+    BitVector Reserved = TRI->getReservedRegs(*MF);
+    bool CanClobberBase =
+        BaseKill && Base != RISCV::X2 && !Reserved.test(Base);
+
+    if (CanClobberBase) {
+      NewBase = Base;
+      BuildMI(*MBB, FirstIt, DL, TII->get(RISCV::ADDI), NewBase)
+          .addReg(Base, getKillRegState(BaseKill))
+          .addImm(MinOff);
+    } else {
+      RegScavenger RS;
+      RS.enterBasicBlockEnd(*MBB);
+      RS.backward(std::next(Group.back()->getIterator()));
+      Register Tmp =
+          RS.scavengeRegisterBackwards(RISCV::GPRNoX0RegClass, FirstIt,
+                                       /*RestoreAfter=*/false, /*SPAdj=*/0,
+                                       /*AllowSpill=*/false);
+      if (!Tmp)
+        return false;
+
+      NewBase = Tmp;
+      BuildMI(*MBB, FirstIt, DL, TII->get(RISCV::ADDI), NewBase)
+          .addReg(Base, getKillRegState(BaseKill))
+          .addImm(MinOff);
+      BaseKill = true; // NewBase is only used by QC_SETWMI.
+    }
+  }
+
+  MachineInstrBuilder MIB =
+      BuildMI(*MBB, FirstIt, DL, TII->get(RISCV::QC_SETWMI));
+  MIB.addReg(RISCV::X0) // store zeros
+      .addReg(NewBase, getKillRegState(BaseKill))
+      .addImm(LenWords)
+      .addImm(QcOff);
+  MIB.cloneMergedMemRefs(Group);
+
+  // Remove all original stores in the group.
+  for (MachineInstr *MI : Group)
+    MI->removeFromParent();
+
+  // Continue scanning after the replaced group.
+  FirstIt = AfterGroupIt;
   return true;
 }
 
