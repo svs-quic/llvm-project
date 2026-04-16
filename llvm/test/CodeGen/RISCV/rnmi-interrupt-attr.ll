@@ -27,7 +27,6 @@ define void @test_rnmi_empty() "interrupt"="rnmi" {
 ; RNMI-RV32-FP-NEXT:    addi s0, sp, 16
 ; RNMI-RV32-FP-NEXT:    .cfi_def_cfa s0, 0
 ; RNMI-RV32-FP-NEXT:    .cfi_def_cfa sp, 16
-; RNMI-RV32-FP-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RNMI-RV32-FP-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RNMI-RV32-FP-NEXT:    .cfi_restore ra
 ; RNMI-RV32-FP-NEXT:    .cfi_restore s0

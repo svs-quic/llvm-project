@@ -3871,7 +3871,6 @@ define void @foo() {
 ; RV32I-WITH-FP-NEXT:    li s4, 0
 ; RV32I-WITH-FP-NEXT:    #NO_APP
 ; RV32I-WITH-FP-NEXT:    .cfi_def_cfa sp, 16
-; RV32I-WITH-FP-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RV32I-WITH-FP-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RV32I-WITH-FP-NEXT:    lw s4, 4(sp) # 4-byte Folded Reload
 ; RV32I-WITH-FP-NEXT:    .cfi_restore ra
@@ -3907,7 +3906,6 @@ define void @foo() {
 ; RV32IZCMP-WITH-FP-NEXT:    li s4, 0
 ; RV32IZCMP-WITH-FP-NEXT:    #NO_APP
 ; RV32IZCMP-WITH-FP-NEXT:    .cfi_def_cfa sp, 16
-; RV32IZCMP-WITH-FP-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RV32IZCMP-WITH-FP-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RV32IZCMP-WITH-FP-NEXT:    lw s4, 4(sp) # 4-byte Folded Reload
 ; RV32IZCMP-WITH-FP-NEXT:    .cfi_restore ra
@@ -4032,7 +4030,6 @@ define void @foo() {
 ; RV32I-ZILSD-WITH-FP-NEXT:    li s4, 0
 ; RV32I-ZILSD-WITH-FP-NEXT:    #NO_APP
 ; RV32I-ZILSD-WITH-FP-NEXT:    .cfi_def_cfa sp, 16
-; RV32I-ZILSD-WITH-FP-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RV32I-ZILSD-WITH-FP-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RV32I-ZILSD-WITH-FP-NEXT:    lw s4, 4(sp) # 4-byte Folded Reload
 ; RV32I-ZILSD-WITH-FP-NEXT:    .cfi_restore ra
@@ -4100,7 +4097,6 @@ define void @bar() {
 ; RV32I-WITH-FP-NEXT:    li s11, 0
 ; RV32I-WITH-FP-NEXT:    #NO_APP
 ; RV32I-WITH-FP-NEXT:    .cfi_def_cfa sp, 16
-; RV32I-WITH-FP-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RV32I-WITH-FP-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RV32I-WITH-FP-NEXT:    lw s11, 4(sp) # 4-byte Folded Reload
 ; RV32I-WITH-FP-NEXT:    .cfi_restore ra
@@ -4136,7 +4132,6 @@ define void @bar() {
 ; RV32IZCMP-WITH-FP-NEXT:    li s11, 0
 ; RV32IZCMP-WITH-FP-NEXT:    #NO_APP
 ; RV32IZCMP-WITH-FP-NEXT:    .cfi_def_cfa sp, 16
-; RV32IZCMP-WITH-FP-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RV32IZCMP-WITH-FP-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RV32IZCMP-WITH-FP-NEXT:    lw s11, 4(sp) # 4-byte Folded Reload
 ; RV32IZCMP-WITH-FP-NEXT:    .cfi_restore ra
@@ -4261,7 +4256,6 @@ define void @bar() {
 ; RV32I-ZILSD-WITH-FP-NEXT:    li s11, 0
 ; RV32I-ZILSD-WITH-FP-NEXT:    #NO_APP
 ; RV32I-ZILSD-WITH-FP-NEXT:    .cfi_def_cfa sp, 16
-; RV32I-ZILSD-WITH-FP-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RV32I-ZILSD-WITH-FP-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RV32I-ZILSD-WITH-FP-NEXT:    lw s11, 4(sp) # 4-byte Folded Reload
 ; RV32I-ZILSD-WITH-FP-NEXT:    .cfi_restore ra

@@ -121,7 +121,6 @@ define i32 @callee_aligned_stack(i32 %a, i32 %b, fp128 %c, i32 %d, i32 %e, i64 %
 ; RV32I-WITHFP-NEXT:    add a0, a0, a1
 ; RV32I-WITHFP-NEXT:    add a3, a4, a3
 ; RV32I-WITHFP-NEXT:    add a0, a0, a3
-; RV32I-WITHFP-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    addi sp, sp, 16
 ; RV32I-WITHFP-NEXT:    ret
@@ -257,7 +256,6 @@ define double @callee_small_scalar_ret() nounwind {
 ; RV32I-WITHFP-NEXT:    addi s0, sp, 16
 ; RV32I-WITHFP-NEXT:    lui a1, 261888
 ; RV32I-WITHFP-NEXT:    li a0, 0
-; RV32I-WITHFP-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    addi sp, sp, 16
 ; RV32I-WITHFP-NEXT:    ret

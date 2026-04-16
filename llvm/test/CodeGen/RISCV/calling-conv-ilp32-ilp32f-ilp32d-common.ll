@@ -37,7 +37,6 @@ define i32 @callee_i64_in_regs(i32 %a, i64 %b) nounwind {
 ; RV32I-WITHFP-NEXT:    sw s0, 8(sp) # 4-byte Folded Spill
 ; RV32I-WITHFP-NEXT:    addi s0, sp, 16
 ; RV32I-WITHFP-NEXT:    add a0, a0, a1
-; RV32I-WITHFP-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    addi sp, sp, 16
 ; RV32I-WITHFP-NEXT:    ret
@@ -120,7 +119,6 @@ define i32 @callee_many_scalars(i8 %a, i16 %b, i32 %c, i64 %d, i32 %e, i32 %f, i
 ; RV32I-WITHFP-NEXT:    seqz a1, a1
 ; RV32I-WITHFP-NEXT:    add a0, a0, t0
 ; RV32I-WITHFP-NEXT:    add a0, a1, a0
-; RV32I-WITHFP-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    addi sp, sp, 16
 ; RV32I-WITHFP-NEXT:    ret
@@ -230,7 +228,6 @@ define i32 @callee_large_scalars(i128 %a, fp128 %b) nounwind {
 ; RV32I-WITHFP-NEXT:    or a0, a0, a4
 ; RV32I-WITHFP-NEXT:    or a0, a0, a1
 ; RV32I-WITHFP-NEXT:    seqz a0, a0
-; RV32I-WITHFP-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    addi sp, sp, 16
 ; RV32I-WITHFP-NEXT:    ret
@@ -338,7 +335,6 @@ define i32 @callee_large_scalars_exhausted_regs(i32 %a, i32 %b, i32 %c, i32 %d, 
 ; RV32I-WITHFP-NEXT:    or a0, a0, a3
 ; RV32I-WITHFP-NEXT:    or a0, a0, a2
 ; RV32I-WITHFP-NEXT:    seqz a0, a0
-; RV32I-WITHFP-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    addi sp, sp, 16
 ; RV32I-WITHFP-NEXT:    ret
@@ -475,7 +471,6 @@ define i32 @callee_small_coerced_struct([2 x i32] %a.coerce) nounwind {
 ; RV32I-WITHFP-NEXT:    addi s0, sp, 16
 ; RV32I-WITHFP-NEXT:    xor a0, a0, a1
 ; RV32I-WITHFP-NEXT:    seqz a0, a0
-; RV32I-WITHFP-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    addi sp, sp, 16
 ; RV32I-WITHFP-NEXT:    ret
@@ -536,7 +531,6 @@ define i32 @callee_large_struct(ptr byval(%struct.large) align 4 %a) nounwind {
 ; RV32I-WITHFP-NEXT:    lw a1, 0(a0)
 ; RV32I-WITHFP-NEXT:    lw a0, 12(a0)
 ; RV32I-WITHFP-NEXT:    add a0, a1, a0
-; RV32I-WITHFP-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    addi sp, sp, 16
 ; RV32I-WITHFP-NEXT:    ret
@@ -641,7 +635,6 @@ define i32 @callee_aligned_stack(i32 %a, i32 %b, fp128 %c, i32 %d, i32 %e, i64 %
 ; RV32I-WITHFP-NEXT:    add a0, a0, a1
 ; RV32I-WITHFP-NEXT:    add a3, a4, a3
 ; RV32I-WITHFP-NEXT:    add a0, a0, a3
-; RV32I-WITHFP-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    addi sp, sp, 16
 ; RV32I-WITHFP-NEXT:    ret
@@ -770,7 +763,6 @@ define i64 @callee_small_scalar_ret() nounwind {
 ; RV32I-WITHFP-NEXT:    lui a0, 466866
 ; RV32I-WITHFP-NEXT:    addi a0, a0, 1677
 ; RV32I-WITHFP-NEXT:    li a1, 287
-; RV32I-WITHFP-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    addi sp, sp, 16
 ; RV32I-WITHFP-NEXT:    ret
@@ -837,7 +829,6 @@ define %struct.small @callee_small_struct_ret() nounwind {
 ; RV32I-WITHFP-NEXT:    addi s0, sp, 16
 ; RV32I-WITHFP-NEXT:    li a0, 1
 ; RV32I-WITHFP-NEXT:    li a1, 0
-; RV32I-WITHFP-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    addi sp, sp, 16
 ; RV32I-WITHFP-NEXT:    ret
@@ -961,7 +952,6 @@ define void @callee_large_struct_ret(ptr noalias sret(%struct.large) %agg.result
 ; RV32I-WITHFP-NEXT:    sw a2, 4(a0)
 ; RV32I-WITHFP-NEXT:    sw a3, 8(a0)
 ; RV32I-WITHFP-NEXT:    sw a4, 12(a0)
-; RV32I-WITHFP-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RV32I-WITHFP-NEXT:    addi sp, sp, 16
 ; RV32I-WITHFP-NEXT:    ret

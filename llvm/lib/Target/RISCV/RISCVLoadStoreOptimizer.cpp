@@ -45,6 +45,7 @@ static cl::opt<unsigned> LdStLimit("riscv-load-store-scan-limit", cl::init(128),
                                    cl::Hidden);
 STATISTIC(NumLD2LW, "Number of LD instructions split back to LW");
 STATISTIC(NumSD2SW, "Number of SD instructions split back to SW");
+STATISTIC(NumLoadsFromStoresPromoted, "Number of loads from stores promoted");
 
 namespace {
 
@@ -79,6 +80,19 @@ struct RISCVLoadStoreOpt : public MachineFunctionPass {
                                 MachineBasicBlock::iterator First,
                                 MachineBasicBlock::iterator Second);
 
+  // Find and promote load instructions which read directly from store.
+  bool tryToPromoteLoadFromStore(MachineBasicBlock::iterator &MBBI);
+
+  // Scan the instructions looking for a store that writes to the address from
+  // which the current load instruction reads. Return true if one is found.
+  bool findMatchingStore(MachineBasicBlock::iterator I, unsigned Limit,
+                         MachineBasicBlock::iterator &StoreI);
+
+  // Promote the load that reads directly from the address stored to.
+  MachineBasicBlock::iterator
+  promoteLoadFromStore(MachineBasicBlock::iterator LoadI,
+                       MachineBasicBlock::iterator StoreI);
+
   // Scan the instructions looking for a load/store that can be combined
   // with the current instruction into a load/store pair.
   // Return the matching instruction if one is found, else MBB->end().
@@ -110,6 +124,21 @@ char RISCVLoadStoreOpt::ID = 0;
 INITIALIZE_PASS(RISCVLoadStoreOpt, DEBUG_TYPE, RISCV_LOAD_STORE_OPT_NAME, false,
                 false)
 
+
+static bool isPromotableLoadFromStore(MachineInstr &MI) {
+  switch (MI.getOpcode()) {
+  default:
+    return false;
+  case RISCV::LBU:
+  case RISCV::LH:
+  case RISCV::LHU:
+  case RISCV::LW:
+  case RISCV::LD:
+  case RISCV::LD_RV32:
+    return true;
+  }
+}
+
 bool RISCVLoadStoreOpt::runOnMachineFunction(MachineFunction &Fn) {
   if (skipFunction(Fn.getFunction()))
     return false;
@@ -122,6 +151,32 @@ bool RISCVLoadStoreOpt::runOnMachineFunction(MachineFunction &Fn) {
   AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
   ModifiedRegUnits.init(*TRI);
   UsedRegUnits.init(*TRI);
+
+  if (!STI->is64Bit() && STI->hasStdExtZilsd()) {
+    for (auto &MBB : Fn) {
+      for (auto MBBI = MBB.begin(), E = MBB.end(); MBBI != E;) {
+        if (fixInvalidRegPairOp(MBB, MBBI)) {
+          MadeChange = true;
+          // Iterator was updated by fixInvalidRegPairOp
+        } else {
+          ++MBBI;
+        }
+      }
+    }
+  }
+
+  
+  if (!STI->is64Bit()) {
+    for (MachineBasicBlock &MBB : Fn) {
+      for (MachineBasicBlock::iterator MBBI = MBB.begin(), E = MBB.end();
+             MBBI != E;) {
+          if (isPromotableLoadFromStore(*MBBI) && tryToPromoteLoadFromStore(MBBI))
+            MadeChange = true;
+          else
+            ++MBBI;
+      }
+    }
+  }
 
   if (STI->useMIPSLoadStorePairs() || STI->hasVendorXqcilsm()) {
     for (MachineBasicBlock &MBB : Fn) {
@@ -138,20 +193,251 @@ bool RISCVLoadStoreOpt::runOnMachineFunction(MachineFunction &Fn) {
     }
   }
 
-  if (!STI->is64Bit() && STI->hasStdExtZilsd()) {
-    for (auto &MBB : Fn) {
-      for (auto MBBI = MBB.begin(), E = MBB.end(); MBBI != E;) {
-        if (fixInvalidRegPairOp(MBB, MBBI)) {
-          MadeChange = true;
-          // Iterator was updated by fixInvalidRegPairOp
-        } else {
-          ++MBBI;
+  return MadeChange;
+}
+
+static unsigned isMatchingStore(MachineInstr &LoadInst,
+                                MachineInstr &StoreInst) {
+  unsigned LdOpc = LoadInst.getOpcode();
+  unsigned StOpc = StoreInst.getOpcode();
+  switch (LdOpc) {
+  default:
+    llvm_unreachable("Unsupported load instruction!");
+  case RISCV::LBU:
+    return StOpc == RISCV::SB || StOpc == RISCV::SH ||
+           StOpc == RISCV::SW  || StOpc == RISCV::SD || StOpc == RISCV::SD_RV32;
+  case RISCV::LH:
+  case RISCV::LHU:
+    return StOpc == RISCV::SH || StOpc == RISCV::SW || StOpc == RISCV::SD || StOpc == RISCV::SD_RV32;
+  case RISCV::LW:
+    return StOpc == RISCV::SW || StOpc == RISCV::SD || StOpc == RISCV::SD_RV32;
+ case RISCV::LD:
+    return StOpc == RISCV::SD;
+ case RISCV::LD_RV32:
+    return StOpc == RISCV::SD_RV32;
+  }
+}
+
+static int getLdStSize(MachineInstr &MI) {
+  switch (MI.getOpcode()) {
+  default:
+    llvm_unreachable("Unexpected LD/ST instruction!");
+  case RISCV::LBU:
+  case RISCV::SB:
+    return 1;
+  case RISCV::LH:
+  case RISCV::LHU:
+  case RISCV::SH:
+    return 2;
+  case RISCV::LW:
+  case RISCV::SW:
+    return 4;
+  case RISCV::LD:
+  case RISCV::SD:
+  case RISCV::LD_RV32:
+  case RISCV::SD_RV32:
+    return 8;
+  }
+}
+
+static bool isLdOffsetInRangeOfSt(MachineInstr &LoadInst,
+                                  MachineInstr &StoreInst) {
+  assert(isMatchingStore(LoadInst, StoreInst) && "Expect only matched ld/st.");
+  int LoadSize = getLdStSize(LoadInst);
+  int StoreSize = getLdStSize(StoreInst);
+  int UnscaledStOffset =
+          StoreInst.getOperand(2).getImm();
+  int UnscaledLdOffset =
+          LoadInst.getOperand(2).getImm();
+
+  return (UnscaledStOffset <= UnscaledLdOffset) &&
+         (UnscaledLdOffset + LoadSize <= (UnscaledStOffset + StoreSize));
+}
+
+bool RISCVLoadStoreOpt::findMatchingStore(
+    MachineBasicBlock::iterator I, unsigned Limit,
+    MachineBasicBlock::iterator &StoreI) {
+  MachineBasicBlock::iterator B = I->getParent()->begin();
+  MachineBasicBlock::iterator MBBI = I;
+  MachineInstr &LoadMI = *I;
+  Register BaseReg = LoadMI.getOperand(1).getReg();
+
+  // If the load is the first instruction in the block, there's obviously
+  // not any matching store.
+  if (MBBI == B)
+    return false;
+
+  // Track which register units have been modified and used between the first
+  // insn and the second insn.
+  ModifiedRegUnits.clear();
+  UsedRegUnits.clear();
+
+  LLVM_DEBUG(dbgs() << "Finding mactching store for the load instruction: " << LoadMI << "\n");
+  unsigned Count = 0;
+  do {
+    MBBI = prev_nodbg(MBBI, B);
+    MachineInstr &MI = *MBBI;
+
+    // Don't count transient instructions towards the search limit since there
+    // may be different numbers of them if e.g. debug information is present.
+    if (!MI.isTransient())
+      ++Count;
+
+    // If the load instruction reads directly from the address to which the
+    // store instruction writes and the stored value is not modified, we can
+    // promote the load. Since we do not handle stores with pre-/post-index,
+    // it's unnecessary to check if BaseReg is modified by the store itself.
+    // Also we can't handle stores without an immediate offset operand,
+    // while the operand might be the address for a global variable.
+    if (MI.mayStore() && isMatchingStore(LoadMI, MI) &&
+        BaseReg == MI.getOperand(1).getReg() &&
+        MI.getOperand(2).isImm() &&
+        isLdOffsetInRangeOfSt(LoadMI, MI) &&
+        ModifiedRegUnits.available(MI.getOperand(0).getReg())) {
+      LLVM_DEBUG(dbgs() << "Matching Store found: " << MI << "\n");
+      StoreI = MBBI;
+      return true;
+    }
+
+    if (MI.isCall())
+      return false;
+
+    // Update modified / uses register units.
+    LiveRegUnits::accumulateUsedDefed(MI, ModifiedRegUnits, UsedRegUnits, TRI);
+
+    // Otherwise, if the base register is modified, we have no match, so
+    // return early.
+    if (!ModifiedRegUnits.available(BaseReg))
+      return false;
+
+    // If we encounter a store aliased with the load, return early.
+    if (MI.mayStore() && LoadMI.mayAlias(AA, MI, /*UseTBAA*/ false))
+      return false;
+  } while (MBBI != B && Count < Limit);
+  return false;
+}
+
+MachineBasicBlock::iterator
+RISCVLoadStoreOpt::promoteLoadFromStore(MachineBasicBlock::iterator LoadI,
+                                        MachineBasicBlock::iterator StoreI) {
+  MachineBasicBlock::iterator NextI =
+      next_nodbg(LoadI, LoadI->getParent()->end());
+
+  int LoadSize = getLdStSize(*LoadI);
+  int StoreSize =  getLdStSize(*StoreI);
+  Register LdRt = LoadI->getOperand(0).getReg();
+  const MachineOperand &StMO = StoreI->getOperand(0);
+  Register StRt = StMO.getReg();
+  bool IsStore64 = StoreI->getOpcode() == RISCV::SD_RV32;
+
+  MachineInstr *BitExtMI = nullptr;
+  if (LoadSize == StoreSize && LoadSize == 4) {
+    // Remove the load, if the destination register of the loads is the same
+    // register for stored value.
+    if (StRt == LdRt) {
+      for (MachineInstr &MI : make_range(StoreI->getIterator(),
+                                         LoadI->getIterator())) {
+        if (MI.killsRegister(StRt, TRI)) {
+          MI.clearRegisterKills(StRt, TRI);
+          break;
         }
       }
+      LLVM_DEBUG(dbgs() << "Remove load instruction:\n    ");
+      LLVM_DEBUG(LoadI->print(dbgs()));
+      LLVM_DEBUG(dbgs() << "\n");
+      LoadI->eraseFromParent();
+      return NextI;
+    }
+    // Replace the load with a mov if the load and store are in the same size.
+    BitExtMI =
+        BuildMI(*LoadI->getParent(), LoadI, LoadI->getDebugLoc(),
+                TII->get(RISCV::ADDI), LdRt)
+            .add(StMO)
+            .addImm(0)
+            .setMIFlags(LoadI->getFlags());
+  } else {
+    int LdOffset = LoadI->getOperand(2).getImm();
+    int StOffset = StoreI->getOperand(2).getImm();
+    dbgs() << "LdOffset: " << LdOffset << " StOffset: " << StOffset << "\n";
+    int Width = LoadSize * 8;
+    int Immr = 8 * (LdOffset - StOffset);
+    int Imms = Immr + Width - 1;
+    if (LdOffset == StOffset) {
+      uint32_t AndMaskEncoded = ((Immr) << 6) | ((Imms) << 0);
+
+      BitExtMI =
+          BuildMI(*LoadI->getParent(), LoadI, LoadI->getDebugLoc(),
+                  TII->get(RISCV::ANDI), LdRt)
+              .add(StMO)
+              .addImm(AndMaskEncoded)
+              .setMIFlags(LoadI->getFlags());
+    } else if (Imms == 31) {
+      assert(Immr <= Imms && "Expected LSR alias of UBFM");
+      BitExtMI = BuildMI(*LoadI->getParent(), LoadI, LoadI->getDebugLoc(),
+                         TII->get(RISCV::SRLI),
+                         LdRt)
+                     .addReg(StRt)
+                     .addImm(Immr)
+                     .setMIFlags(LoadI->getFlags()); 
+    } else if (!STI->is64Bit() && STI->hasVendorXqcibm()) {
+      BitExtMI =
+          BuildMI(*LoadI->getParent(), LoadI, LoadI->getDebugLoc(),
+                  TII->get(RISCV::QC_EXTU),
+                  LdRt)
+              .add(StMO)
+              .addImm(Width)
+              .addImm(Immr)
+              .setMIFlags(LoadI->getFlags());
     }
   }
 
-  return MadeChange;
+  if (BitExtMI) {
+    // Clear kill flags between store and load.
+    for (MachineInstr &MI : make_range(StoreI->getIterator(),
+                                       BitExtMI->getIterator()))
+      if (MI.killsRegister(StRt, TRI)) {
+        MI.clearRegisterKills(StRt, TRI);
+        break;
+      }
+
+    LLVM_DEBUG(dbgs() << "Promoting load by replacing :\n    ");
+    LLVM_DEBUG(StoreI->print(dbgs()));
+    LLVM_DEBUG(dbgs() << "    ");
+    LLVM_DEBUG(LoadI->print(dbgs()));
+    LLVM_DEBUG(dbgs() << "  with instructions:\n    ");
+    LLVM_DEBUG(StoreI->print(dbgs()));
+    LLVM_DEBUG(dbgs() << "    ");
+    LLVM_DEBUG((BitExtMI)->print(dbgs()));
+    LLVM_DEBUG(dbgs() << "\n");
+
+    // Erase the old instructions.
+    LoadI->eraseFromParent();
+  }
+  return NextI;
+}
+
+bool RISCVLoadStoreOpt::tryToPromoteLoadFromStore(
+    MachineBasicBlock::iterator &MBBI) {
+  MachineInstr &MI = *MBBI;
+  // If this is a volatile load, don't mess with it.
+  if (MI.hasOrderedMemoryRef())
+    return false;
+
+  // Make sure this is a reg+imm.
+  if (!MI.getOperand(2).isImm())
+    return false;
+
+  // Look backward up to LdStLimit instructions.
+  MachineBasicBlock::iterator StoreI;
+  if (findMatchingStore(MBBI, LdStLimit, StoreI)) {
+    ++NumLoadsFromStoresPromoted;
+    // Promote the load. Keeping the iterator straight is a
+    // pain, so we let the merge routine tell us what the next instruction
+    // is after it's done mucking about.
+    MBBI = promoteLoadFromStore(MBBI, StoreI);
+    return true;
+  }
+  return false;
 }
 
 // Find loads and stores that can be merged into a single load or store pair

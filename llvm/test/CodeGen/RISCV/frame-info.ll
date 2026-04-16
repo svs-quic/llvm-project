@@ -37,7 +37,6 @@ define void @trivial() {
 ; RV32-WITHFP-NEXT:    addi s0, sp, 16
 ; RV32-WITHFP-NEXT:    .cfi_def_cfa s0, 0
 ; RV32-WITHFP-NEXT:    .cfi_def_cfa sp, 16
-; RV32-WITHFP-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RV32-WITHFP-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RV32-WITHFP-NEXT:    .cfi_restore ra
 ; RV32-WITHFP-NEXT:    .cfi_restore s0
@@ -83,7 +82,6 @@ define void @trivial() {
 ; RV32-WITHFP-DISABLESW-NEXT:    addi s0, sp, 16
 ; RV32-WITHFP-DISABLESW-NEXT:    .cfi_def_cfa s0, 0
 ; RV32-WITHFP-DISABLESW-NEXT:    .cfi_def_cfa sp, 16
-; RV32-WITHFP-DISABLESW-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RV32-WITHFP-DISABLESW-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RV32-WITHFP-DISABLESW-NEXT:    .cfi_restore ra
 ; RV32-WITHFP-DISABLESW-NEXT:    .cfi_restore s0

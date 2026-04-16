@@ -41,7 +41,6 @@ define void @stack_swap_empty_fp() "interrupt"="SiFive-CLIC-stack-swap" "frame-p
 ; RV32-NEXT:    addi s0, sp, 16
 ; RV32-NEXT:    .cfi_def_cfa s0, 0
 ; RV32-NEXT:    .cfi_def_cfa sp, 16
-; RV32-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RV32-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RV32-NEXT:    .cfi_restore ra
 ; RV32-NEXT:    .cfi_restore s0
@@ -884,7 +883,6 @@ define void @stack_swap_clobber_fp() "interrupt"="SiFive-CLIC-stack-swap" "frame
 ; RV32-NEXT:    #APP
 ; RV32-NEXT:    #NO_APP
 ; RV32-NEXT:    .cfi_def_cfa sp, 16
-; RV32-NEXT:    lw ra, 12(sp) # 4-byte Folded Reload
 ; RV32-NEXT:    lw s0, 8(sp) # 4-byte Folded Reload
 ; RV32-NEXT:    lw s1, 4(sp) # 4-byte Folded Reload
 ; RV32-NEXT:    .cfi_restore ra
