@@ -1,0 +1,18 @@
+#---LTOSectionAttribute.test--------------------- Executable,LS,LTO -------------#
+#
+# JIRA: https://jira-quic.qualcomm.com/jira/browse/QTOOL-7284
+#
+# BEGIN_COMMENT
+# Test that section attributes that assign the same section with global symbols
+# also works.
+# END_COMMENT
+# START_TEST
+RUN: %clang %clangopts -c %p/Inputs/1.c -ffunction-sections -flto -o %t1.1.o
+RUN: %clang %clangopts -c %p/Inputs/2.c -ffunction-sections -flto -o %t1.2.o
+RUN: %clang %clangopts -c %p/Inputs/3.c -o %t1.3.o
+RUN: %link %linkopts %t1.1.o %t1.2.o %t1.3.o -T %p/Inputs/script.t -o %t2.out
+RUN: %readelf -S -W %t2.out | %filecheck %s
+
+#CHECK: .myfoo
+#CHECK: .mybar
+#END_TEST

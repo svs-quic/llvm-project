@@ -44,11 +44,13 @@
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
+#include "llvm/MC/MCSectionELF.h"
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
@@ -3521,6 +3523,21 @@ public:
   }
 
   InstructionCost getVectorSplitCost() const { return 1; }
+
+  StringRef getDefaultSectionNameForGlobal(const GlobalObject &GO) {
+    const TargetMachine &TM = getTLI()->getTargetMachine();
+    const TargetLoweringObjectFile &TLOF = *TM.getObjFileLowering();
+    SectionKind GVKind = TLOF.getKindForGlobal(&GO, TM);
+    // Section selection might depend on module flags like SmallDataLimit.
+    const_cast<TargetLoweringObjectFile &>(TLOF).getModuleMetadata(
+        *const_cast<Module *>(GO.getParent()));
+    auto Section = static_cast<const MCSectionELF *>(
+        TLOF.SectionForGlobal(&GO, GVKind, TM));
+    if (Section)
+      return Section->getName();
+    else
+      return "";
+  }
 
   /// @}
 };

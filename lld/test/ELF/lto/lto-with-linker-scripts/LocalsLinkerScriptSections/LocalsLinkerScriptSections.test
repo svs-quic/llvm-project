@@ -1,0 +1,8 @@
+# Check if LTO works for no groups and only archives and bitcodes
+RUN: %clang %clangopts %clangg0opts -c -flto -fdata-sections -ffunction-sections  %p/Inputs/1.c -o %t1.o
+RUN: %link %linkopts %linkg0opts -e main -T %p/Inputs/script.t -plugin-opt=O0 -plugin-opt=-data-sections -plugin-opt=-function-sections  %t1.o -o %t.out
+RUN: %readelf -S %t.out | %filecheck %s --check-prefix="SEC"
+
+#SEC:  .myfoo            PROGBITS
+#SEC:  .mybar            PROGBITS
+#SEC:  .mybaz            PROGBITS

@@ -124,6 +124,7 @@ private:
   std::vector<BitcodeModule> Mods;
   SmallVector<char, 0> Strtab;
   std::vector<Symbol> Symbols;
+  std::vector<Symbol> SymbolsWithLocals;
 
   // [begin, end) for each module
   std::vector<std::pair<size_t, size_t>> ModuleSymIndices;
@@ -185,6 +186,10 @@ public:
 
   /// A range over the symbols in this InputFile.
   ArrayRef<Symbol> symbols() const { return Symbols; }
+
+  /// A range over the symbols in this InputFile, including local symbols.
+  /// Used with linker scripts to map symbol sections.
+  ArrayRef<Symbol> symbolsWithLocals() const { return SymbolsWithLocals; }
 
   /// Returns linker options specified in the input file.
   StringRef getCOFFLinkerOpts() const { return COFFLinkerOpts; }
@@ -713,6 +718,12 @@ struct SymbolResolution {
   /// Linker redefined version of the symbol which appeared in -wrap or -defsym
   /// linker option.
   unsigned LinkerRedefined : 1;
+
+  /// When linking with a linker script, the output section where this symbol
+  /// will be placed. Certain optimizations must be suppressed between globals
+  /// with a different output section, to ensure the variable or function is
+  /// actually emitted into the correct section.
+  StringRef OutputSection;
 };
 
 } // namespace lto

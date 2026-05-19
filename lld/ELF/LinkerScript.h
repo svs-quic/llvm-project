@@ -411,6 +411,12 @@ public:
   // undefined reference.
   bool shouldAddProvideSym(StringRef symName);
 
+  StringRef mapLTOSectionName(StringRef inputSection, InputFile *file);
+
+  bool matchesFile(const InputSectionDescription *desc,
+                   InputSectionBase *sec) const;
+  bool excludesFile(const SectionPattern *pat, InputSectionBase *sec) const;
+
   // SECTIONS command list.
   SmallVector<SectionCommand *, 0> sectionCommands;
 
@@ -469,6 +475,8 @@ public:
   // section descriptions. Multiple references allow for sections to spill from
   // one output section to another.
   llvm::DenseMap<llvm::CachedHashStringRef, SectionClassDesc *> sectionClasses;
+
+  llvm::StringMap<InputFile *> ltoInputFileMapping;
 };
 
 } // end namespace lld::elf

@@ -639,11 +639,18 @@ Expected<std::unique_ptr<InputFile>> InputFile::create(MemoryBufferRef Object) {
   for (unsigned I = 0; I != FOrErr->Mods.size(); ++I) {
     size_t Begin = File->Symbols.size();
     for (const irsymtab::Reader::SymbolRef &Sym :
-         FOrErr->TheReader.module_symbols(I))
+         FOrErr->TheReader.module_symbols(I)) {
       // Skip symbols that are irrelevant to LTO. Note that this condition needs
       // to match the one in Skip() in LTO::addRegularLTO().
       if (Sym.isGlobal() && !Sym.isFormatSpecific())
         File->Symbols.push_back(Sym);
+      // List of symbols which need to be mapped for LTO with linker scripts.
+      // FIXME: Consider splitting isFormatSpecific to check for symbols which
+      // need to be mapped.
+      if (!Sym.getName().starts_with("llvm.") &&
+          !Sym.getSectionName().starts_with("llvm."))
+        File->SymbolsWithLocals.push_back(Sym);
+    }
     File->ModuleSymIndices.push_back({Begin, File->Symbols.size()});
   }
 
@@ -1021,6 +1028,8 @@ LTO::addRegularLTO(InputFile &Input, ArrayRef<SymbolResolution> InputRes,
   // InputFile::create we omit some symbols that are irrelevant to LTO. The
   // Skip() function skips the same symbols from the module as InputFile does
   // from the symbol table.
+  //
+  // FIXME: Adapt to symbolsWithLocals.
   auto MsymI = SymTab.symbols().begin(), MsymE = SymTab.symbols().end();
   auto Skip = [&]() {
     while (MsymI != MsymE) {
@@ -1080,6 +1089,31 @@ LTO::addRegularLTO(InputFile &Input, ArrayRef<SymbolResolution> InputRes,
         if (GV->hasDLLImportStorageClass())
           GV->setDLLStorageClass(GlobalValue::DLLStorageClassTypes::
                                  DefaultStorageClass);
+      }
+
+      // Set the output section based on the linker script.
+      if (!R.OutputSection.empty()) {
+        if (auto *GVar = dyn_cast<GlobalVariable>(GV)) {
+          // First, remove the old attribute if present
+          if (GVar->hasAttribute("linker_output_section")) {
+            AttrBuilder Attrs(GVar->getParent()->getContext(),
+                              GVar->getAttributes());
+            Attrs.removeAttribute("linker_output_section");
+            GVar->setAttributes(AttributeSet::get(GVar->getContext(), Attrs));
+          }
+          GVar->addAttribute("linker_output_section", R.OutputSection);
+          if (GVar->hasSection())
+            GVar->setSection(
+                (GVar->getSection() + "^^" + M.getModuleIdentifier()).str());
+        } else if (auto *F = dyn_cast<Function>(GV)) {
+          // First, remove the old attribute if present
+          if (F->hasFnAttribute("linker_output_section"))
+            F->removeFnAttr("linker_output_section");
+          F->addFnAttr("linker_output_section", R.OutputSection);
+          if (F->hasSection())
+            F->setSection(
+                (F->getSection() + "^^" + M.getModuleIdentifier()).str());
+        }
       }
     } else if (auto *AS =
                    dyn_cast_if_present<ModuleSymbolTable::AsmSymbol *>(Msym)) {
