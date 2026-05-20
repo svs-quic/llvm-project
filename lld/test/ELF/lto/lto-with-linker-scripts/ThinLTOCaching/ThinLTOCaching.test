@@ -1,0 +1,74 @@
+#---ThinLTOWithLS.test------------------------------ Executable,LTO ---------------------#
+# JIRA : https://jira-quic.qualcomm.com/jira/browse/QTOOL-28202
+# JIRA : https://jira-dc.qualcomm.com/jira/browse/QTOOL-103344
+#BEGIN_COMMENT
+# This tests that the ThinLTO cache works when enabled. We test for the same results as
+# the ThinLTOWithLS test.
+#END_COMMENT
+
+RUN: %clang %clangopts -c %p/Inputs/1.c -O2 -ffunction-sections -flto=thin -o %t1.1.o
+RUN: %clang %clangopts -c %p/Inputs/2.c -O2 -ffunction-sections -flto=thin -o %t1.2.o
+RUN: %clang %clangopts -c %p/Inputs/3.c -O2 -ffunction-sections -o %t1.3.o
+
+RUN: cp -f %p/Inputs/script.t %t1.script.t
+RUN: rm -Rf %t1.cache && mkdir %t1.cache
+
+### Note that the command line must be exactly the same in all three runs.
+RUN: %link %linkopts --gc-sections --thinlto-cache-dir=%t1.cache -plugin-opt=-function-sections -e main -T %t1.script.t %t1.1.o %t1.2.o %t1.3.o -o %t1.out
+RUN: %readelf -S -W %t1.out | %filecheck --check-prefix=SECTIONS %s
+
+# Check that two files were added to the cache
+RUN: ls %t1.cache | %filecheck --check-prefix=LLVMCACHE-TWO --check-prefix=LLVMCACHE %s
+
+RUN: %link %linkopts --gc-sections --thinlto-cache-dir=%t1.cache -plugin-opt=-function-sections -e main -T %t1.script.t %t1.1.o %t1.2.o %t1.3.o -o %t1.out
+
+# Check that we didn't add any new files to the cache
+RUN: ls %t1.cache | %filecheck --check-prefix=LLVMCACHE-TWO --check-prefix=LLVMCACHE %s
+RUN: %readelf -S -W %t1.out | %filecheck --check-prefix=SECTIONS %s
+
+SECTIONS: .alltext
+SECTIONS-NOT: ] .text
+
+### A comment added to the script
+RUN: cp -f %p/Inputs/script2.t %t1.script.t
+RUN: %link %linkopts --gc-sections --thinlto-cache-dir=%t1.cache -plugin-opt=-function-sections -e main -T %t1.script.t %t1.1.o %t1.2.o %t1.3.o -o %t1.out 2>&1
+RUN: %readelf -S -W %t1.out | %filecheck --check-prefix=SECTIONS %s
+
+# Check that the change in the linker script did not trigger recompilation. There should still be only 2 cache files.
+RUN: ls %t1.cache | %filecheck --check-prefix=LLVMCACHE-TWO --check-prefix=LLVMCACHE %s
+
+### A materially different script is used.
+RUN: cp -f %p/Inputs/script2a.t %t1.script.t
+RUN: %link %linkopts --gc-sections --thinlto-cache-dir=%t1.cache -plugin-opt=-function-sections -e main -T %t1.script.t %t1.1.o %t1.2.o %t1.3.o -o %t1.out
+RUN: %readelf -S -W %t1.out | %filecheck --check-prefix=SECTIONS2 %s
+
+SECTIONS2-NOT: .special
+
+# Check that the change in the linker script did not trigger recompilation. There should still be only 2 cache files.
+RUN: ls %t1.cache | %filecheck --check-prefix=LLVMCACHE-TWO --check-prefix=LLVMCACHE %s
+LLVMCACHE-TWO-COUNT-2: llvmcache-[[X:[[:xdigit:]]+]]
+
+LLVMCACHE-NOT:         llvmcache-[[X:[[:xdigit:]]+]]
+
+# Test that a change in archive order does not confuse the linker and/or the cache
+
+# First iteration to create cache entries
+RUN: %ar cr %aropts %t1.lib.a %t1.3.o
+RUN: %ar cr %aropts %t1.lib.a %t1.2.o
+RUN: %ar cr %aropts %t1.lib.a %t1.1.o
+RUN: cp -f %p/Inputs/script3.t %t1.script.t
+RUN: rm -Rf %t1.cache && mkdir %t1.cache
+RUN: %link %linkopts --gc-sections --thinlto-cache-dir=%t1.cache -plugin-opt=-function-sections -e main -T %t1.script.t %t1.lib.a -o %t1.out
+
+# Check that the two files were re-used from the cache
+RUN: ls %t1.cache | %filecheck --check-prefix=LLVMCACHE-TWO --check-prefix=LLVMCACHE %s
+
+# Re-order the archive
+RUN: rm %t1.lib.a
+RUN: %ar cr %aropts %t1.lib.a %t1.1.o
+RUN: %ar cr %aropts %t1.lib.a %t1.2.o
+RUN: %ar cr %aropts %t1.lib.a %t1.3.o
+RUN: %link %linkopts --gc-sections --thinlto-cache-dir=%t1.cache -e main -T %t1.script.t %t1.lib.a -o %t1.out
+
+# Check that the two files were re-used from the cache
+RUN: ls %t1.cache | %filecheck --check-prefix=LLVMCACHE-TWO --check-prefix=LLVMCACHE %s

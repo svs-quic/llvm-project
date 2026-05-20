@@ -1,0 +1,33 @@
+### TODO: This test fails on arm, and risc-v because local symbols in the LTO object are not referenced relative to section name (.text.baz),
+### but to the local symbol (baz). Therefore, instead of `prohibited cross reference from .text to `.text.baz'` the output contains
+### `prohibited cross reference from .text to `baz'1. Functionality is correct.
+
+#---NoCrossRefs.test--------------------- Executable,LS------------------------#
+## JIRA : https://jira-quic.qualcomm.com/jira/browse/QTOOL-30563
+# JIRA : https://jira-dc.qualcomm.com/jira/browse/QTOOL-103344
+#BEGIN_COMMENT
+# This tests that sections in NOCROSSREFS linker command prohibits
+# accesses (references) among the specified output sections
+#END_COMMENT
+RUN: %clang %clangg0opts -flto -c -g -gdwarf-4 %p/Inputs/1.c -o %t1.o -ffunction-sections -fdata-sections
+RUN: %rm %t/archive
+RUN: %mkdir %t/archive
+RUN: %clang %clangg0opts -flto -c -g -gdwarf-4 %p/Inputs/2.c -o %t/archive/2.o -ffunction-sections -fdata-sections
+RUN: %rm %tlib1.a
+RUN: %ar cr %aropts %tlib1.a  %t/archive/2.o
+RUN: %not %link %linkg0opts %t1.o -T %p/Inputs/script.t %tlib1.a -e main -plugin-opt=-function-sections -o %t1.out --error-limit 0 2>&1 | %filecheck %s --check-prefix="REGULAR"
+
+# Test normal case of cross reference prohibition between commons, and sections
+# (data and text)
+REGULAR: .text.main{{.*}}: prohibited cross reference from '.text' to '.text.baz' in '.baz'
+
+# Test that a gc'd output section should not trigger error with NOCROSSREFS as
+# it is never contained in output file
+RUN: %link %linkg0opts %t1.o -T %p/Inputs/script.gc %tlib1.a --gc-sections -o %t2.out --entry=main
+
+# Test a corss reference between a debug and a text is also prohibited. The
+# script has .debug_info as orphan (also checks orphans are accounted for
+# prohibition).
+RUN: %not %link %linkg0opts %t1.o -T %p/Inputs/script.dbg %tlib1.a -e main -o %t3.out 2>&1 | %filecheck %s --check-prefix="DBG"
+
+DBG: .debug_info{{.*}}: prohibited cross reference from '.debug_info' to '.text.main' in '.text'

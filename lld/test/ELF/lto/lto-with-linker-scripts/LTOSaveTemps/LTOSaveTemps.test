@@ -1,0 +1,33 @@
+#---ThinLTOWithLS.test------------------------------ Executable,LTO ---------------------#
+# JIRA : https://jira-quic.qualcomm.com/jira/browse/QTOOL-32343
+#BEGIN_COMMENT
+# Test that (Thin)LTO works correctly with -save-temps
+#END_COMMENT
+
+# Test ThinLTO
+
+RUN: %clang %clangopts -c %p/Inputs/1.c -O2 -ffunction-sections -flto=thin -o %t1.1.o
+RUN: %clang %clangopts -c %p/Inputs/2.c -O2 -ffunction-sections -flto=thin -o %t1.2.o
+RUN: %clang %clangopts -c %p/Inputs/3.c -O2 -ffunction-sections -o %t1.3.o
+
+RUN: %link %linkopts --gc-sections -save-temps -e main -T %p/Inputs/script.t %t1.1.o %t1.2.o %t1.3.o -o %t1.out
+
+RUN: %readelf -S -W %t1.out | %filecheck --check-prefix=SECTIONS %s
+
+# With thin LTO, IPSCCP takes care of propagating the constant return value
+# of otherfun2, so .special gets GCed.
+SECTIONS: .alltext
+SECTIONS-NOT: ] .text
+
+# Test regular LTO
+RUN: %clang %clangopts -c %p/Inputs/1.c -O2 -ffunction-sections -flto -o %t2.1.o
+RUN: %clang %clangopts -c %p/Inputs/2.c -O2 -ffunction-sections -flto -o %t2.2.o
+
+RUN: %link %linkopts --gc-sections -save-temps -e main -T %p/Inputs/script.t %t2.1.o %t2.2.o %t1.3.o -o %t2.out
+
+RUN: %readelf -S -W %t2.out | %filecheck --check-prefix=REGSECTIONS %s
+
+# With regular LTO, IPSCCP takes care of propagating the constant return value
+# of otherfun2, so .special gets GCed
+REGSECTIONS: .alltext
+REGSECTIONS-NOT: ] .text

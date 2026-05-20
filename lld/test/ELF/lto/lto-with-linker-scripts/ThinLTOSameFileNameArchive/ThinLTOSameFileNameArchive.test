@@ -1,0 +1,27 @@
+#---ThinLTOSameFileNameArchive.test----------------- Executable,LTO ---------------------#
+# JIRA : https://jira-quic.qualcomm.com/jira/browse/QTOOL-28277
+# JIRA : https://jira-dc.qualcomm.com/jira/browse/QTOOL-103344
+#BEGIN_COMMENT
+# This tests that ThinLTO can handle archives with multiple members
+# with the same name correctly (two files named 1.o in this case).
+#END_COMMENT
+
+RUN: mkdir -p %t1/tmp
+RUN: mkdir -p %t2/tmp
+RUN: %clang %clangopts -c %p/Inputs/a/1.c -O2 -ffunction-sections -flto=thin -o %t1/tmp/1.o
+RUN: %clang %clangopts -c %p/Inputs/b/1.c -O2 -ffunction-sections -flto=thin -o %t2/tmp/1.o
+RUN: %ar cr %aropts %t2.a %t1/tmp/1.o %t2/tmp/1.o
+RUN: %clang %clangopts -c %p/Inputs/3.c -O2 -ffunction-sections -o %t1.3.o
+RUN: %link %linkopts --gc-sections -plugin-opt=-function-sections -plugin-opt=-data-sections -e main -T %p/Inputs/script.t %t1.3.o %t2.a -o %t1.out
+
+RUN: %readelf -S -W %t1.out | %filecheck --check-prefix=SECTIONS %s
+
+SECTIONS: .alltext
+SECTIONS-NOT: .text
+
+RUN: %readelf -s -W %t1.out | %filecheck %s
+
+CHECK-NOT: FUNC
+CHECK-DAG: FUNC GLOBAL DEFAULT 2 main
+CHECK-DAG: FUNC GLOBAL DEFAULT 2 myfun
+CHECK-NOT: FUNC

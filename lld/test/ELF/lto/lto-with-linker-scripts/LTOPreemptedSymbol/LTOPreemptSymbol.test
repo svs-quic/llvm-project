@@ -1,0 +1,15 @@
+#BEGIN_COMMENT
+# Test that weak preempted symbols are not preserved.
+#END_COMMENT
+
+RUN: %clang %clangopts -c %p/Inputs/1.c -o %t.1.o -flto
+RUN: %clang %clangopts -c %p/Inputs/2.c -o %t.2.o
+
+RUN: %link %linkopts %t.1.o %t.2.o -Map=%t.map.txt -T %p/Inputs/script.t -o %t.out
+RUN: %filecheck %s < %t.map.txt
+CHECK: .tcm
+CHECK-NEXT: {{.*}}1.o
+CHECK-NEXT: bar
+CHECK: .text
+CHECK-NEXT: {{.*}}2.o
+CHECK-NEXT: foo

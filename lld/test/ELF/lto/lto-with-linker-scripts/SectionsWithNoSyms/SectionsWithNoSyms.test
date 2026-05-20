@@ -1,0 +1,11 @@
+# Fails since LLD does not have support for this
+XFAIL:*
+
+RUN: %clang %clangopts %clangg0opts -c -flto -fdata-sections -ffunction-sections  %p/Inputs/1.c -o %t1.o
+RUN: %link %linkopts %linkg0opts -e main -T %p/Inputs/script.t -plugin-opt=O0 -plugin-opt=-data-sections -plugin-opt=-function-sections  %t1.o -o %t.out
+RUN: %readelf -S %t.out | %filecheck %s --check-prefix="SEC"
+RUN: %readelf -s %t.out | %filecheck %s --check-prefix="SYMS"
+
+#SEC:  .myrodata         PROGBITS
+#SYMS: .myrodata
+#SYMS-NOT: rodata

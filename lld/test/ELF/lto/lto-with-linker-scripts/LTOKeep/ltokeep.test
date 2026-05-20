@@ -1,0 +1,10 @@
+XFAIL:*
+# This test fails with lld since it does not set the appropriate structure (llvm::lto::SymbolResolution)
+# VisibleToRegularObj to true for the symbols that need to be kept.
+# Test that linker preserves symbols defined in sections that need to be kept.
+RUN: %clang %clangopts -c %p/Inputs/foo.c -o %t1.foo.o -flto -ffunction-sections
+RUN: %clang %clangopts -c %p/Inputs/main.c -o %t1.main.o -ffunction-sections
+RUN: %link %linkopts %t1.foo.o %t1.main.o -T %p/Inputs/script.t -o %t1.out
+RUN: %readelf -S %t1.out | %filecheck %s -check-prefix=SECTIONS
+
+#SECTIONS: .text.foo

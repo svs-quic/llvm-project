@@ -1,0 +1,15 @@
+UNSUPPORTED: iu, riscv64
+#---CheckWrapSymbolsResolution.test----------------------- Executable,LTO --------------------#
+# JIRA : https://jira-quic.qualcomm.com/jira/browse/QTOOL-59690
+#BEGIN_COMMENT
+# This test that the wrap symbol is resolved from the desired input file.
+#END_COMMENT
+#START_TEST
+RUN: %clang %clangopts -c %p/Inputs/1.c -o %t1.1.o -ffunction-sections
+RUN: %clang %clangopts -c %p/Inputs/2.c -o %t1.2.o -flto -ffunction-sections
+RUN: %clang %clangopts -c %p/Inputs/3.c -o %t1.3.o -flto -ffunction-sections
+RUN: %clang %clangopts -c %p/Inputs/w.c -o %t1.w.o -flto -ffunction-sections
+RUN: %link %linkopts %t1.1.o %t1.w.o %t1.2.o %t1.3.o -T %p/Inputs/script.t --wrap foo -t -o %t2.out
+RUN: %objdump -Cx %t2.out | %filecheck %s
+#CHECK: f000000 {{.*}}     F .wrap  {{.*}} __wrap_foo
+#END_TEST

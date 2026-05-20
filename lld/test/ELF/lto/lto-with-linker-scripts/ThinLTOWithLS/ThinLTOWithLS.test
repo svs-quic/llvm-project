@@ -1,0 +1,25 @@
+#---ThinLTOWithLS.test------------------------------ Executable,LTO ---------------------#
+# JIRA : https://jira-quic.qualcomm.com/jira/browse/QTOOL-23410
+#BEGIN_COMMENT
+# This tests that ThinLTO works.
+#END_COMMENT
+
+RUN: %clang %clangopts -c %p/Inputs/1.c -O2 -ffunction-sections -flto=thin -o %t1.1.o
+RUN: %clang %clangopts -c %p/Inputs/2.c -O2 -ffunction-sections -flto=thin -o %t1.2.o
+RUN: %clang %clangopts -c %p/Inputs/3.c -O2 -ffunction-sections -o %t1.3.o
+RUN: %link %linkopts --gc-sections -print-gc-sections -plugin-opt=-function-sections -plugin-opt=-data-sections --save-temps -e main -T %p/Inputs/script.t %t1.1.o %t1.2.o %t1.3.o -o %t1.out 2>&1 | %filecheck --check-prefix=GARBAGE %s
+
+GARBAGE-DAG: removing unused section {{.*}}(.text.otherfun2)
+GARBAGE-DAG: removing unused section {{.*}}(.text.otherfun)
+
+RUN: %readelf -S -W %t1.out | %filecheck --check-prefix=SECTIONS %s
+
+SECTIONS: .alltext
+SECTIONS-NOT: .text
+
+RUN: %readelf -s -W %t1.out | %filecheck %s
+
+CHECK-NOT: FUNC
+CHECK: FUNC GLOBAL DEFAULT 2 myfun
+CHECK: FUNC GLOBAL DEFAULT 2 main
+CHECK-NOT: FUNC

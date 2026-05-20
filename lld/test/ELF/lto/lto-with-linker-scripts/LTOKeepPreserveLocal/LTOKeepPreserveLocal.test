@@ -1,0 +1,14 @@
+XFAIL:*
+# This test fails with lld since it does not set the appropriate structure (llvm::lto::SymbolResolution)
+# VisibleToRegularObj to true for the symbols that need to be kept.
+#---LTOKeepPreserveLocal.test-------------------------------- Executable,LTO,LS ---------------------#
+# JIRA : https://jira-quic.qualcomm.com/jira/browse/QTOOL-34860
+#BEGIN_COMMENT
+# This is a test for when the linker script decides to KEEP local symbols. This
+# test requires support for reading local symbols from bitcode files.
+#END_COMMENT
+
+RUN: %clang %clangopts -c %p/Inputs/1.c -ffunction-sections -o %t1.1.o -flto
+RUN: %link %linkopts %t1.1.o -T %p/Inputs/script.t -o %t2.out -e main
+RUN: %readelf -s %t2.out | %filecheck --check-prefix=KEEP %s
+#KEEP: foo

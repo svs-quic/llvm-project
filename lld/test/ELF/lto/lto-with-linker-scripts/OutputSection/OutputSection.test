@@ -1,0 +1,11 @@
+#---OutputSection.test--------------------- Executable-------------------------#
+# START_COMMENT
+# Basic test to assign a symbol to an output section.
+#END_COMMENT
+#START_TEST
+RUN: %clang %clangopts -c %p/Inputs/foo.c -ffunction-sections -o %t.foo.o -flto
+RUN: %link %linkopts -T %p/Inputs/script.t %t.foo.o -e foo -plugin-opt=-function-sections -o %t2.out 2>&1
+RUN: %readelf -S -s -W %t2.out | %filecheck %s --check-prefix=ELF
+ELF: [ [[S:[0-9]+]]] .myfoo PROGBITS
+ELF: FUNC GLOBAL DEFAULT [[S]] foo
+#END_TEST

@@ -1,0 +1,15 @@
+#---LTOUsed.test------------------------------------------- Executable,LTO  --------------#
+# JIRA : https://jira-quic.qualcomm.com/jira/browse/QTOOL-22234
+#BEGIN_COMMENT
+# This tests that LTO with Optimal Preservelist handles llvm.used. This is a
+# special symbol created to contain all the variables that have been declared
+# with the __attribute__((used)). This functionality is very similar to
+# llvm.global_ctors/llvm.global_dtors. The compiler is  yet to figure out how to
+# preserve the symbols mentioned with the attribute((used)).
+#END_COMMENT
+#START_TEST
+RUN: %clang %clangopts -c %p/Inputs/used.c -o %t1.lto.o -flto  -ffunction-sections -fdata-sections
+RUN: %link %linkopts   %t1.lto.o -e foo -o %t2.out
+RUN: %readelf -s -W %t2.out | %filecheck %s
+#CHECK: val
+#END_TEST
