@@ -1,10 +1,48 @@
-# Fails since LLD does not have support for this
-XFAIL:*
+# REQUIRES: x86
+# Fails since LLD does not have support for this.
+# XFAIL: *
 
-RUN: %clang %clangg0opts -c -flto -fdata-sections -ffunction-sections %p/Inputs/1.c -o %t1.o
-RUN: %clang %clangg0opts -c -flto -fdata-sections -ffunction-sections %p/Inputs/2.c -o %t2.o
-RUN: %link %linkopts -T %p/Inputs/script.t -plugin-opt=O0 -plugin-opt=-data-sections -plugin-opt=-function-sections  %t1.o %t2.o -o %t.out
-RUN: %readelf -S -W %t.out | %filecheck %s --check-prefix="SEC"
+# RUN: rm -rf %t && split-file %s %t
+# RUN: llvm-as %t/1.ll -o %t/1.o
+# RUN: llvm-as %t/2.ll -o %t/2.o
+# RUN: ld.lld -m elf_x86_64 --lto-linker-scripts -T %t/script.t -plugin-opt=O0 \
+# RUN:   -plugin-opt=-data-sections -plugin-opt=-function-sections %t/1.o %t/2.o -o %t/out
+# RUN: llvm-readelf -S -W %t/out | FileCheck %s --check-prefix=SEC
 
-#SEC:  .mydata1          PROGBITS
-#SEC:  .mydata2          PROGBITS
+# SEC:  .mydata1          PROGBITS
+# SEC:  .mydata2          PROGBITS
+
+#--- 1.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+@bar = internal global i32 20, section ".data.bar"
+
+declare i32 @baz()
+
+define i32 @foo() section ".text.foo" {
+  %a = load i32, ptr @bar
+  %b = call i32 @baz()
+  %c = add i32 %a, %b
+  ret i32 %c
+}
+
+#--- 2.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+@bar = internal global i64 30, section ".data.bar"
+
+define i32 @baz() section ".text.baz" {
+  %a = load i64, ptr @bar
+  %b = trunc i64 %a to i32
+  ret i32 %b
+}
+
+#--- script.t
+SECTIONS {
+  .text.foo : { *1.o(.text.foo) }
+  .text.baz : { *1.o(.text.baz) }
+  .mydata1 : { *1.o(.data.bar) }
+  .mydata2 : { *2.o(.data.bar) }
+}

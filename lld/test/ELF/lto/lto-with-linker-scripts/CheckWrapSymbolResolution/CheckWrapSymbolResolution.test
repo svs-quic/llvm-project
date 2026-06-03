@@ -1,15 +1,67 @@
-UNSUPPORTED: iu, riscv64
-#---CheckWrapSymbolsResolution.test----------------------- Executable,LTO --------------------#
-# JIRA : https://jira-quic.qualcomm.com/jira/browse/QTOOL-59690
-#BEGIN_COMMENT
-# This test that the wrap symbol is resolved from the desired input file.
-#END_COMMENT
-#START_TEST
-RUN: %clang %clangopts -c %p/Inputs/1.c -o %t1.1.o -ffunction-sections
-RUN: %clang %clangopts -c %p/Inputs/2.c -o %t1.2.o -flto -ffunction-sections
-RUN: %clang %clangopts -c %p/Inputs/3.c -o %t1.3.o -flto -ffunction-sections
-RUN: %clang %clangopts -c %p/Inputs/w.c -o %t1.w.o -flto -ffunction-sections
-RUN: %link %linkopts %t1.1.o %t1.w.o %t1.2.o %t1.3.o -T %p/Inputs/script.t --wrap foo -t -o %t2.out
-RUN: %objdump -Cx %t2.out | %filecheck %s
-#CHECK: f000000 {{.*}}     F .wrap  {{.*}} __wrap_foo
-#END_TEST
+# REQUIRES: x86
+# RUN: rm -rf %t && split-file %s %t
+# RUN: llvm-mc -filetype=obj -triple=x86_64-unknown-linux-gnu %t/1.s -o %t/1.o
+# RUN: llvm-as %t/2.ll -o %t/2.o
+# RUN: llvm-as %t/3.ll -o %t/3.o
+# RUN: llvm-as %t/w.ll -o %t/w.o
+# RUN: ld.lld -m elf_x86_64 --lto-linker-scripts %t/1.o %t/w.o %t/2.o %t/3.o \
+# RUN:   -T %t/script.t --wrap foo -t -o %t/out
+# RUN: llvm-objdump -Cx %t/out | FileCheck %s
+
+# CHECK: f000000 {{.*}}     F .wrap  {{.*}} __wrap_foo
+
+#--- 1.s
+.text
+.section .text.main,"ax",@progbits
+.globl main
+.type main,@function
+main:
+  call foo
+  ret
+.size main, .-main
+
+#--- 2.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+declare i32 @foo()
+
+define i32 @bar() section ".text.bar" {
+  %v = call i32 @foo()
+  ret i32 %v
+}
+
+#--- 3.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+declare i32 @foo()
+
+define i32 @b1() section ".text.b1" {
+  %v = call i32 @foo()
+  ret i32 %v
+}
+
+#--- w.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @__wrap_foo() section ".text.__wrap_foo" {
+  ret i32 1
+}
+
+#--- script.t
+SECTIONS {
+ .near : {
+    *(.text.main)
+    *(.text.foo)
+    *(.text.bar)
+    *(.text.b1)
+    *(.text.b2)
+  }
+
+  . = 0xF000000;
+  .wrap : {
+    *(.text.__wrap_foo)
+  }
+}

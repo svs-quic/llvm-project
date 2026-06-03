@@ -1,18 +1,46 @@
-#---LTOSectionAttribute.test--------------------- Executable,LS,LTO -------------#
-#
-# JIRA: https://jira-quic.qualcomm.com/jira/browse/QTOOL-7284
-#
-# BEGIN_COMMENT
-# Test that section attributes that assign the same section with global symbols
-# also works.
-# END_COMMENT
-# START_TEST
-RUN: %clang %clangopts -c %p/Inputs/1.c -ffunction-sections -flto -o %t1.1.o
-RUN: %clang %clangopts -c %p/Inputs/2.c -ffunction-sections -flto -o %t1.2.o
-RUN: %clang %clangopts -c %p/Inputs/3.c -o %t1.3.o
-RUN: %link %linkopts %t1.1.o %t1.2.o %t1.3.o -T %p/Inputs/script.t -o %t2.out
-RUN: %readelf -S -W %t2.out | %filecheck %s
+# REQUIRES: x86
+# RUN: rm -rf %t && split-file %s %t
+# RUN: llvm-as %t/1.ll -o %t/1.o
+# RUN: llvm-as %t/2.ll -o %t/2.o
+# RUN: llvm-mc -filetype=obj -triple=x86_64-unknown-linux-gnu %t/3.s -o %t/3.o
+# RUN: ld.lld -m elf_x86_64 --lto-linker-scripts %t/1.o %t/2.o %t/3.o -T %t/script.t -o %t/out
+# RUN: llvm-readelf -S -W %t/out | FileCheck %s
 
-#CHECK: .myfoo
-#CHECK: .mybar
-#END_TEST
+# CHECK: .myfoo
+# CHECK: .mybar
+
+#--- 1.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @foo() section ".foo" {
+  ret i32 0
+}
+
+#--- 2.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @bar() section ".foo" {
+  ret i32 0
+}
+
+#--- 3.s
+.text
+.section .text,"ax",@progbits
+.globl main
+.type main,@function
+main:
+  call foo
+  mov %eax, %ecx
+  call bar
+  add %ecx, %eax
+  ret
+.size main, .-main
+
+#--- script.t
+SECTIONS {
+.myfoo : { *1.o*(.foo) }
+.mybar : { *2.o*(.foo) }
+.main : { *(.text) }
+}

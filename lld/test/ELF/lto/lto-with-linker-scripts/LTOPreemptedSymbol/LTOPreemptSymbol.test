@@ -1,15 +1,52 @@
-#BEGIN_COMMENT
-# Test that weak preempted symbols are not preserved.
-#END_COMMENT
+# REQUIRES: x86
+# RUN: rm -rf %t && split-file %s %t
+# RUN: llvm-as %t/1.ll -o %t/1.o
+# RUN: llvm-mc -filetype=obj -triple=x86_64-unknown-linux-gnu %t/2.s -o %t/2.o
+# RUN: ld.lld -m elf_x86_64 --lto-linker-scripts %t/1.o %t/2.o -Map=%t/map.txt -T %t/script.t -o %t/out
+# RUN: FileCheck %s < %t/map.txt
 
-RUN: %clang %clangopts -c %p/Inputs/1.c -o %t.1.o -flto
-RUN: %clang %clangopts -c %p/Inputs/2.c -o %t.2.o
+# CHECK: .tcm
+# CHECK-NEXT: {{.*}}1.o
+# CHECK-NEXT: bar
+# CHECK: .text
+# CHECK-NEXT: {{.*}}2.o
+# CHECK-NEXT: foo
 
-RUN: %link %linkopts %t.1.o %t.2.o -Map=%t.map.txt -T %p/Inputs/script.t -o %t.out
-RUN: %filecheck %s < %t.map.txt
-CHECK: .tcm
-CHECK-NEXT: {{.*}}1.o
-CHECK-NEXT: bar
-CHECK: .text
-CHECK-NEXT: {{.*}}2.o
-CHECK-NEXT: foo
+#--- 1.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+define weak i32 @foo() section ".tcm_static" {
+  ret i32 0
+}
+
+define weak i32 @bar() section ".tcm_static" {
+  ret i32 0
+}
+
+#--- 2.s
+.text
+.section .text.foo,"ax",@progbits
+.globl foo
+.type foo,@function
+foo:
+  xor %eax, %eax
+  ret
+.size foo, .-foo
+
+.section .text.main,"ax",@progbits
+.globl main
+.type main,@function
+main:
+  call foo
+  mov %eax, %ecx
+  call bar
+  add %ecx, %eax
+  ret
+.size main, .-main
+
+#--- script.t
+SECTIONS {
+  .tcm : { KEEP (*(.tcm_static)) }
+  .text : { *(.text*) }
+}

@@ -1,19 +1,74 @@
-XFAIL:*
-# This test fails on LLD since local symbols section dont contain the input file info
-# Check that locals in LTO match the correct linker script rules
-# based on their original files.
-RUN: %clang %clangopts -c -flto -ffunction-sections %p/Inputs/A.c -o %tA.o
-RUN: %clang %clangopts -c -ffunction-sections %p/Inputs/B.c -o %tB.o
-RUN: %link %linkopts -Map=%t.map.txt -T %p/Inputs/script.t %tA.o %tB.o -o %t.out 
-RUN: %filecheck %s --check-prefix=MAP < %t.map.txt
+# REQUIRES: x86
+# XFAIL: *
+# This test fails with lld since local symbol sections do not contain input-file provenance.
 
-#MAP: .foo
-#MAP: __foo_A
-#MAP: .text.Afun2
-#MAP: .text.Afun1
-#MAP: __foo_B
-#MAP: .text.Bfun2
-#MAP: .text.Bfun1
-#MAP: .text.main
-#MAP: __foo_end
+# RUN: rm -rf %t && split-file %s %t
+# RUN: llvm-as %t/A.ll -o %t/A.o
+# RUN: llvm-mc -filetype=obj -triple=x86_64-unknown-linux-gnu %t/B.s -o %t/B.o
+# RUN: ld.lld -m elf_x86_64 --lto-linker-scripts -Map=%t/map.txt -T %t/script.t %t/A.o %t/B.o -o %t/out
+# RUN: FileCheck %s --check-prefix=MAP < %t/map.txt
 
+# MAP: .foo
+# MAP: __foo_A
+# MAP: .text.Afun2
+# MAP: .text.Afun1
+# MAP: __foo_B
+# MAP: .text.Bfun2
+# MAP: .text.Bfun1
+# MAP: .text.main
+# MAP: __foo_end
+
+#--- A.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+declare ptr @Bfun2(i32)
+
+define internal noinline ptr @Afun1(i32 %x) section ".text.Afun1" {
+  %p = call ptr @Bfun2(i32 0)
+  ret ptr %p
+}
+
+define ptr @Afun2(i32 %y) section ".text.Afun2" {
+  %p = call ptr @Afun1(i32 0)
+  ret ptr %p
+}
+
+#--- B.s
+.text
+.section .text.Bfun1,"ax",@progbits
+.type Bfun1,@function
+Bfun1:
+  xor %rax, %rax
+  ret
+.size Bfun1, .-Bfun1
+
+.section .text.Bfun2,"ax",@progbits
+.globl Bfun2
+.type Bfun2,@function
+Bfun2:
+  jmp Bfun1
+.size Bfun2, .-Bfun2
+
+.section .text.main,"ax",@progbits
+.globl main
+.type main,@function
+main:
+  xor %edi, %edi
+  call Afun2
+  xor %edi, %edi
+  call Bfun2
+  xor %eax, %eax
+  ret
+.size main, .-main
+
+#--- script.t
+SECTIONS {
+  .foo : {
+     __foo_A = .;
+     *A.o(.text.*)
+     __foo_B = .;
+     *B.o(.text.*)
+     __foo_end = .;
+     }
+}
